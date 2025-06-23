@@ -2,289 +2,246 @@
 #include <DHT.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <ModbusRTUSlave.h>
- 
-#define SLAVE_ID 1
-#define DE_RE 2
- 
-ModbusRTUSlave slave(Serial);
-uint16_t registers[8];
- 
-// input variables part 2
-Servo servo_11;
- 
-// input variables part 3
-Servo servo_10;
- 
-// input variables and functions part 4
-void sound_alarm() // sound alarm function
+
+// ---------- SECTION 1: light & sound ----------
+volatile int lightLevel;          // light sensor (A1)
+volatile int ambientSound;        // sound sensor (D2)
+
+// ---------- SECTION 2: coin acceptor ----------
+int coinSensor;                   // coin sensor (A0)
+Servo coinServo;                  // servo on pin 11
+
+// ---------- SECTION 3: rain ----------
+int rainfall;                     // rain sensor (A2)
+Servo windowServo;                // servo on pin 10
+
+// ---------- SECTION 4: soil moisture & alarm ----------
+int soilMoisture;                 // soil moisture sensor (A3)
+void soilAlarm()                  // soil moisture alarm
 {
   digitalWrite(13, HIGH);
   tone(3, 532);
   delay(125);
-  delay(200);
-  digitalWrite(13, LOW);
   noTone(3);
   delay(200);
 }
- 
-// input variables and functions part 5
-void control_fan(int speedPin, int speed)  // fan operation function
+
+// ---------- SECTION 5: flame & fan ----------
+int flameDetected;                // flame sensor (D8)
+void fanControl(int speedPin, int speed)  // fan control helper
 {
-  if (speed <= 0)
-  {
+  if (speed <= 0) {
     analogWrite(speedPin, 0);
-  }
-  else if (speed > 255)
-  {
+  } else if (speed > 255) {
     analogWrite(speedPin, 255);
-  }
-  else
-  {
+  } else {
     analogWrite(speedPin, speed);
   }
 }
- 
-// input variables part 6
-DHT dht12(12, 11);
- 
-// input variables and functions part 7
-int red;
-int green;
+
+// ---------- SECTION 6: DHT12 ----------
+int temperatureC;
+int humidityPct;
+DHT dht12(12, 11);   // (dataPin, DHT11)
+
+// ---------- SECTION 7: keypad & door ----------
+int redBtn;
+int greenBtn;
 int timeCounter;
 String password;
-int door;
 boolean doorAccess;
 LiquidCrystal_I2C lcd(0x27, 16, 2);
-Servo servo_9;
+Servo doorServo;      // servo on pin 9
 
-void play_key_tone()
+void playKeyTone()
 {
   tone(3, 349);
   delay(125);
-  delay(100);
   noTone(3);
   delay(100);
 }
 
-void confirm_password()
+void confirmPassword()
 {
-  if (green == 0 && red != 0)
-  {
+  if (greenBtn == 0 && redBtn != 0) {
     delay(100);
-    red = digitalRead(5);
-    if (green == 0 && red != 0)
-    {
-      if (!doorAccess)
-      {
-        if (password == "--")
-        {
+    redBtn = digitalRead(5);
+    if (greenBtn == 0 && redBtn != 0) {
+      if (!doorAccess) {
+        if (password == "--") {
           lcd.clear();
           lcd.setCursor(0, 0);
           lcd.print("Smart Home");
           lcd.setCursor(0, 1);
-          lcd.print("Pass");
-          lcd.setCursor(10, 1);
-          lcd.print("OK");
-          servo_9.write(180);
-          delay(0);
-          door = 0;
+          lcd.print("Pass OK");
+          doorServo.write(180);  // open
           doorAccess = true;
-        }
-        else
-        {
+        } else {
           lcd.clear();
           lcd.setCursor(0, 0);
           lcd.print("Smart Home");
           lcd.setCursor(0, 1);
-          lcd.print("Pass:");
-          lcd.setCursor(10, 1);
-          lcd.print("Err");
+          lcd.print("Pass Err");
           tone(3, 165);
           delay(125);
-          delay(500);
           noTone(3);
           delay(200);
           lcd.clear();
           lcd.setCursor(0, 0);
           lcd.print("Smart Home");
-          lcd.setCursor(10, 1);
-          lcd.print("Again");
           lcd.setCursor(0, 1);
-          lcd.print("Password:");
-          play_key_tone();
+          lcd.print("Again");
+          playKeyTone();
         }
-      }
-      else // doorAccess == true
-      {
+      } else {               // door currently open
         doorAccess = false;
         lcd.clear();
         lcd.setCursor(0, 0);
         lcd.print("Smart Home");
-        servo_9.write(110);
-        delay(0);
+        doorServo.write(90); // close
       }
       password = "";
     }
   }
 }
- 
+
 void setup()
 {
-  pinMode(DE_RE, OUTPUT);
- 
   Serial.begin(9600);
-  slave.begin(SLAVE_ID, 9600, SERIAL_8N1);
-  slave.configureHoldingRegisters(registers, 8);
- 
-  // initialize variables part 1  
-  pinMode(A1, INPUT);
-  pinMode(A4, INPUT);
-  pinMode(7, OUTPUT);
- 
-  // initialize variables part 2
-  pinMode(A0, INPUT);
-  servo_11.attach(11);
- 
-  // initialize variables part 3
-  pinMode(A2, INPUT);
-  servo_10.attach(10);
- 
-  // initialize variables part 4
-  pinMode(13, OUTPUT);
-  pinMode(3, OUTPUT);
-  pinMode(A3, INPUT);
- 
-  // initialize variables part 5
-  pinMode(8, INPUT);
-  pinMode(6, OUTPUT);
+  Serial.println(F("Smart Home system starting..."));
+
+  // SECTION 1
+  pinMode(A1, INPUT);    // light sensor
+  pinMode(2, INPUT);     // sound sensor
+  pinMode(7, OUTPUT);    // alert LED
+
+  // SECTION 2
+  pinMode(A0, INPUT);    // coin sensor
+  coinServo.attach(11);
+  coinServo.write(90);
+
+  // SECTION 3
+  pinMode(A2, INPUT);    // rain sensor
+  windowServo.attach(10);
+  windowServo.write(0);
+
+  // SECTION 4
+  pinMode(A3, INPUT);    // soil sensor
+  pinMode(13, OUTPUT);   // alarm LED/buzzer
+  pinMode(3, OUTPUT);    // buzzer tone pin
+
+  // SECTION 5
+  pinMode(8, INPUT);     // flame sensor
+  pinMode(6, OUTPUT);    // fan PWM
   digitalWrite(6, LOW);
- 
-  // initialize variables part 6
+
+  // SECTION 6
   dht12.begin();
-  pinMode(6, OUTPUT);
-  digitalWrite(6, LOW);
- 
-  // initialize variables part 7
-  pinMode(3, OUTPUT);
-  red = 1;
-  green = 1;
-  timeCounter = 0;
-  password = "";
-  door = 0;
-  doorAccess = false;
+
+  // SECTION 7
+  pinMode(5, INPUT);     // red button
+  pinMode(4, INPUT);     // green button
+  doorServo.attach(9);
+  doorServo.write(90);   // closed
   lcd.init();
   lcd.backlight();
-  servo_9.attach(9);
   lcd.setCursor(0, 0);
   lcd.print("Smart Home");
-  servo_9.write(110);
-  pinMode(5, INPUT);
-  pinMode(4, INPUT);
 }
- 
+
 void loop()
 {
-  digitalWrite(DE_RE, LOW);
- 
-  if (slave.poll()) {
-    digitalWrite(DE_RE, HIGH);
-    delay(10);
-    digitalWrite(DE_RE, LOW);
-  }
- 
-  // main program part 1
-  registers[0] = analogRead(A1);
-  registers[1] = analogRead(A4);
-  if (registers[0] > 500)
-  {
-    if (registers[1] == 1)
-    {
-      digitalWrite(7, HIGH); // turn on red LED
-      delay(6000);
-      digitalWrite(7, LOW);  // turn off red LED
-    }
-  }
-  else
-  {
+  /* ---------- READ SENSORS ---------- */
+  lightLevel    = analogRead(A1);
+  ambientSound  = digitalRead(2);
+  coinSensor    = digitalRead(A0);
+  rainfall      = analogRead(A2);
+  soilMoisture  = analogRead(A3);
+  flameDetected = digitalRead(8);
+  temperatureC  = dht12.readTemperature();
+  humidityPct   = dht12.readHumidity();
+
+  /* ---------- SERIAL MONITOR ---------- */
+  Serial.println(F("----- Sensor Readings -----"));
+  Serial.print(F("Light level: ")); Serial.println(lightLevel);
+  Serial.print(F("Ambient sound: ")); Serial.println(ambientSound);
+  Serial.print(F("Coin sensor: ")); Serial.println(coinSensor);
+  Serial.print(F("Rain level: ")); Serial.println(rainfall);
+  Serial.print(F("Soil moisture: ")); Serial.println(soilMoisture);
+  Serial.print(F("Flame detected: ")); Serial.println(flameDetected);
+  Serial.print(F("Temperature (C): ")); Serial.println(temperatureC);
+  Serial.print(F("Humidity (%): ")); Serial.println(humidityPct);
+  Serial.println();
+
+  /* ---------- ACTUATION LOGIC ---------- */
+
+  // SECTION 1: Light & sound to LED alert
+  if (lightLevel > 500 && ambientSound == HIGH) {
+    digitalWrite(7, HIGH);
+    delay(6000);
+    digitalWrite(7, LOW);
+  } else {
     digitalWrite(7, LOW);
   }
- 
-  // main program part 2
-  registers[2] = digitalRead(A0); // coin inserted reads 0
-  if (registers[2] == 0)
-  {
-    servo_11.write(180);
+
+  // SECTION 2: Coin acceptor
+  if (coinSensor == LOW) {      // coin inserted
+    coinServo.write(180);
+  } else {
+    coinServo.write(90);
   }
-  else if (registers[2] == 1)
-  {
-    servo_11.write(90);
+
+  // SECTION 3: Rain → window
+  if (rainfall > 100) {
+    windowServo.write(90);      // close window
+  } else {
+    windowServo.write(0);       // open window
   }
- 
-  // main program part 3
-  registers[3] = analogRead(A2);
-  if (registers[3] > 100)
-  {
-    servo_10.write(90); // close window
-  }
-  else
-  {
-    servo_10.write(0);  // keep window open
-  }
- 
-  // main program part 4
-  registers[4] = analogRead(A3);
-  if (registers[4] < 50)
-  {
-    sound_alarm();
-  }
-  else
-  {
+
+  // SECTION 4: Soil moisture → alarm
+  if (soilMoisture < 50) {
+    soilAlarm();
+  } else {
     digitalWrite(13, LOW);
     noTone(3);
   }
- 
-  // main program part 5
-  registers[5] = digitalRead(8);
-  if (registers[5] == 1) // if light sensor detects radiation
-  {
-    control_fan(6, 120); // fan on pin 6 at speed 120/255
-  }
-  else
-  {
-    control_fan(6, 0);
-  }
- 
-  // main program part 6
-  registers[6] = dht12.readTemperature(); // degrees Celsius
-  registers[7] = dht12.readHumidity();    // percent
-  if (registers[6] > 30)
-  {
-    control_fan(6, 60);
-  }
-  else
-  {
-    control_fan(6, 0);
-  }
- 
-  // main program part 7
-  green = digitalRead(4);
-  red = digitalRead(5);  // 1 if button not pressed, 0 if pressed
-  if (green != 0 && red == 0)
-  {
+
+  // SECTION 5: Flame → fan
+  fanControl(6, flameDetected == HIGH ? 120 : 0);
+
+  // SECTION 6: Temperature-based fan (optional)
+  /* if (temperatureC > 30) {
+       fanControl(6, 60);
+     } else {
+       fanControl(6, 0);
+     } */
+
+  // SECTION 7: Keypad / buttons
+  greenBtn = digitalRead(4);
+  redBtn   = digitalRead(5);
+  if (greenBtn != 0 && redBtn == 0) {
     delay(100);
-    green = digitalRead(4);
-    while (green != 0 && red == 0)
-    {
-      red = digitalRead(5);
+    greenBtn = digitalRead(4);
+    while (greenBtn != 0 && redBtn == 0) {
+      redBtn = digitalRead(5);
       timeCounter++;
       delay(100);
     }
   }
-  if (timeCounter > 1 && timeCounter < 5)
-  {
-    play_key_tone();
-    password += ".";
+
+  if (timeCounter > 1 && timeCounter < 5) { // short press = dot
+    playKeyTone();
+    password += '.';
+    lcd.clear();
+    lcd.setCursor(0, 0);
+    lcd.print("Smart Home");
+    lcd.setCursor(0, 1);
+    lcd.print("Password:");
+    lcd.setCursor(10, 1);
+    lcd.print(password);
+  } else if (timeCounter >= 5) { // long press = dash
+    playKeyTone();
+    password += '-';
     lcd.clear();
     lcd.setCursor(0, 0);
     lcd.print("Smart Home");
@@ -293,18 +250,9 @@ void loop()
     lcd.setCursor(10, 1);
     lcd.print(password);
   }
-  if (timeCounter > 5)
-  {
-    play_key_tone();
-    password += "-";
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Smart Home");
-    lcd.setCursor(0, 1);
-    lcd.print("Password:");
-    lcd.setCursor(10, 1);
-    lcd.print(password);
-  }
-  confirm_password();
+
+  confirmPassword();
   timeCounter = 0;
+
+  delay(200);  // ease serial output readability
 }
